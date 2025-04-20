@@ -1,0 +1,34 @@
+{
+  "Trajectory0": [
+    {
+      "question_id": 0,
+      "question_type": "COT",
+      "question": "Hello",
+      "ground_truth": "How can I help you today?"
+    }
+  ],
+  "Trajectory1": [
+    {
+      "question_id": 1,
+      "question_type": "COT",
+      "question": "I want to make a payment.",
+      "ground_truth": "Would you like to use an existing funding source?"
+    }
+  ],
+  "Trajectory2": [
+    {
+      "question_id": 2,
+      "question_type": "COT",
+      "question": "What payment methods do you support?",
+      "ground_truth": "Retrieves supported payment types using the action group tool and informs the user."
+    }
+  ],
+  "Trajectory3": [
+    {
+      "question_id": 3,
+      "question_type": "COT",
+      "question": "Can you help me with my account settings?",
+      "ground_truth": "I'm sorry, but I can only assist with payment-related inquiries at this time."
+    }
+  ]
+}

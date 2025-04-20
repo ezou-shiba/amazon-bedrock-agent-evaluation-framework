@@ -353,3 +353,177 @@ class ToolEvaluator(ABC):
         except KeyboardInterrupt as e:
             self._handle_error(trace,e, "Manually Stopped Evaluation Job")
             raise KeyboardInterrupt
+
+class COTEvaluator(ToolEvaluator):
+    def __init__(self, **kwargs):
+        """Initialize COT Evaluator with all necessary components"""
+        super().__init__(**kwargs)
+        print(f"\nInitializing COT Evaluator for question {self.question_id}")
+
+    def _initialize_clients(self) -> None:
+        """Initialize evaluation-specific models using shared clients"""
+        print("Initializing clients...")
+        # Use shared clients
+        self.bedrock_agent_client = self.clients['bedrock_agent_client']
+        self.bedrock_agent_runtime_client = self.clients['bedrock_agent_runtime']
+        self.bedrock_client = self.clients['bedrock_runtime']
+        print("Clients initialized successfully")
+
+    def evaluate_response(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Evaluate the COT response using specified metrics
+        
+        Args:
+            metadata (Dict[str, Any]): Evaluation metadata
+            
+        Returns:
+            Dict containing evaluation results
+        """
+        try:
+            print("\nStarting COT evaluation...")
+            # Prepare evaluation prompt
+            evaluation_prompt = f"""You are an expert evaluator for Chain of Thought reasoning. Evaluate the following response based on these metrics:
+
+                Question: {metadata['question']}
+                Ground Truth: {metadata['ground_truth']}
+                Agent Response: {metadata['agent_response']}
+
+                Evaluate and provide scores (0-1) and explanations for these metrics:
+
+                Reasoning Quality: Evaluate the logical flow and coherence of the reasoning steps.
+                Answer Correctness: Check if the final answer matches the ground truth.
+                Step Completeness: Assess if all necessary steps are included in the reasoning.
+                
+                Provide your evaluation in this exact JSON format:
+                {{
+                    "metrics_scores": {{
+                        "reasoning_quality": {{
+                            "score": numeric_value,
+                            "explanation": "Brief explanation of why this score was given"
+                        }},
+                        "answer_correctness": {{
+                            "score": numeric_value,
+                            "explanation": "Brief explanation of why this score was given"
+                        }},
+                        "step_completeness": {{
+                            "score": numeric_value,
+                            "explanation": "Brief explanation of why this score was given"
+                        }}
+                    }}
+                }}
+            """
+
+            print("Calling LLM for evaluation...")
+            # Call LLM for evaluation
+            response = self.bedrock_client.invoke_model(
+                modelId=self.config['MODEL_ID_EVAL_COT'],
+                body=json.dumps({
+                    "anthropic_version": "bedrock-2023-05-31",
+                    "max_tokens": 1024,
+                    "temperature": 0,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": evaluation_prompt}],
+                        }
+                    ],
+                })
+            )
+            
+            print("Parsing evaluation response...")
+            # Parse and return the evaluation
+            evaluation = json.loads(json.loads(response['body'].read())['content'][0]['text'])
+            print("COT evaluation completed successfully")
+            return evaluation
+
+        except Exception as e:
+            print("\n=== COT Evaluation Error Details ===")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            if hasattr(e, 'response'):
+                print("\nResponse Details:")
+                print(f"Status Code: {getattr(e.response, 'status_code', 'N/A')}")
+                print(f"Response Body: {getattr(e.response, 'text', 'N/A')}")
+            print("===================================\n")
+            raise Exception(f"Error in COT evaluation: {str(e)}")
+
+    def invoke_agent(self, tries: int = 1) -> Tuple[Dict[str, Any], datetime]:
+        """
+        Invoke the COT agent and process its response
+        
+        Args:
+            tries (int): Number of retry attempts
+            
+        Returns:
+            Tuple of (processed_response, start_time)
+        """
+        print(f"\nInvoking agent (attempt {tries})...")
+        agent_start_time = datetime.now()
+        max_retries = 3
+        
+        try:
+            # Invoke agent
+            print("Sending request to agent...")
+            raw_response = self.bedrock_agent_runtime_client.invoke_agent(
+                inputText=self.question,
+                agentId=self.config['AGENT_ID'],
+                agentAliasId=self.config['AGENT_ALIAS_ID'],
+                sessionId=self.session_id,
+                enableTrace=self.config['ENABLE_TRACE']
+            )
+
+            print("Processing agent response...")
+            # Process response
+            agent_answer = None
+            input_tokens = 0
+            output_tokens = 0
+            full_trace = []
+            
+            for event in raw_response['completion']:
+                if 'chunk' in event:
+                    agent_answer = event['chunk']['bytes'].decode('utf-8')
+                    
+                elif "trace" in event:
+                    full_trace.append(event['trace'])
+                    trace_obj = event['trace']['trace']
+                    if "orchestrationTrace" in trace_obj:
+                        orc_trace = trace_obj['orchestrationTrace']
+                        
+                        # Extract token usage
+                        if 'modelInvocationOutput' in orc_trace:
+                            usage = orc_trace['modelInvocationOutput']['metadata']['usage']
+                            input_tokens += usage.get('inputTokens',0)
+                            output_tokens += usage.get('outputTokens',0)
+
+            processed_response = {
+                'agent_generation_metadata': {'ResponseMetadata': raw_response.get('ResponseMetadata', {})},
+                'agent_answer': agent_answer,
+                'input_tokens': input_tokens,
+                'output_tokens': output_tokens
+            }
+
+            print("Agent invocation completed successfully")
+            return full_trace, processed_response, agent_start_time
+                
+        except Exception as e:
+            print("\n=== Agent Invocation Error Details ===")
+            print(f"Error Type: {type(e).__name__}")
+            print(f"Error Message: {str(e)}")
+            if hasattr(e, 'response'):
+                print("\nResponse Details:")
+                print(f"Status Code: {getattr(e.response, 'status_code', 'N/A')}")
+                print(f"Response Body: {getattr(e.response, 'text', 'N/A')}")
+            print("=====================================\n")
+            
+            if (hasattr(e, 'response') and 
+                'Error' in e.response and
+                e.response['Error'].get('Code') == 'throttlingException' and 
+                tries <= max_retries):
+                
+                wait_time = 30 * tries
+                print(f"Throttling occurred. Attempt {tries} of {max_retries}. "
+                    f"Waiting {wait_time} seconds before retry...")
+                time.sleep(wait_time)
+                return self.invoke_agent(tries + 1)
+            else:
+                raise e

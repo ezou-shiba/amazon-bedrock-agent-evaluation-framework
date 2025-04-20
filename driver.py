@@ -5,6 +5,7 @@ import sys
 import json
 from typing import Dict, Any, List
 from evaluators.rag_evaluator import RAGEvaluator
+from evaluators.cot_evaluator import COTEvaluator
 from evaluators.text2sql_evaluator import Text2SQLEvaluator
 from evaluators.custom_evaluator import CustomEvaluator
 from botocore.client import Config
@@ -12,6 +13,7 @@ from helpers.agent_info_extractor import AgentInfoExtractor
 import time
 
 from dotenv import load_dotenv
+from langfuse import Langfuse
 
 # Load environment variables from config.env
 load_dotenv('config.env')
@@ -41,14 +43,60 @@ MODEL_ID_EVAL_COT = os.getenv('MODEL_ID_EVAL_COT')
 DATA_FILE_PATH = os.getenv('DATA_FILE_PATH')
 
 def setup_environment() -> None:
-    """Setup environment variables for Langfuse"""
-    langfuse_vars = {
-        "LANGFUSE_PUBLIC_KEY": LANGFUSE_PUBLIC_KEY,
-        "LANGFUSE_SECRET_KEY": LANGFUSE_SECRET_KEY,
-        "LANGFUSE_HOST": LANGFUSE_HOST
-    }
-    for key, value in langfuse_vars.items():
-        os.environ[key] = value
+    """Set up the environment and initialize clients."""
+    print("Initializing Langfuse client...")
+    
+    # Initialize Langfuse client with debug mode
+    langfuse_client = Langfuse(
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
+        host=os.getenv("LANGFUSE_HOST"),
+        debug=True  # Enable debug mode
+    )
+    
+    print(f"Langfuse client initialized with host: {os.getenv('LANGFUSE_HOST')}")
+    
+    # Test Langfuse connection with more detailed logging
+    try:
+        print("Creating test trace...")
+        test_trace = langfuse_client.trace(
+            name="test_connection",
+            metadata={"test": "connection_check"}
+        )
+        print(f"Test trace created with ID: {test_trace.id}")
+        
+        print("Creating test span...")
+        test_span = test_trace.span(
+            name="test_span",
+            metadata={"test": "span_check"}
+        )
+        print(f"Test span created with ID: {test_span.id}")
+        
+        print("Updating test span...")
+        test_span.update(
+            status_message="test_complete",
+            metadata={"status": "success"}
+        )
+        print("Test span updated")
+        
+        print("Updating test trace status...")
+        test_trace.update(
+            status_message="test_complete",
+            metadata={"status": "success"}
+        )
+        print("Test trace updated")
+        
+        # Force flush to ensure data is sent
+        print("Flushing Langfuse client...")
+        langfuse_client.flush()
+        
+        print("✅ Successfully connected to Langfuse")
+        return langfuse_client
+    except Exception as e:
+        print(f"❌ Error connecting to Langfuse: {str(e)}")
+        print(f"Debug info - Host: {os.getenv('LANGFUSE_HOST')}")
+        print(f"Debug info - Public Key: {os.getenv('LANGFUSE_PUBLIC_KEY')}")
+        raise
 
 def get_config() -> Dict[str, Any]:
     """Get configuration settings"""
@@ -90,6 +138,7 @@ def create_evaluator(eval_type: str, config: Dict[str, Any],
     evaluator_map = {
         'RAG': RAGEvaluator,
         'TEXT2SQL': Text2SQLEvaluator,
+        'COT': COTEvaluator,
         'CUSTOM': CustomEvaluator
         # Add other evaluator types here
     }
