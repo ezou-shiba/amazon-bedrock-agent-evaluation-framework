@@ -5,7 +5,7 @@ import requests
 
 def check_environment():
     # Load environment variables
-    load_dotenv()
+    load_dotenv('config.env')
     
     # Check required environment variables
     required_vars = [
